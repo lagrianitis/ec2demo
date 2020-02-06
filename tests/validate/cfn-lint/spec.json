@@ -1,0 +1,15 @@
+{
+  "IncludeResourceTypes": [
+    "AWS::*"
+  ],
+  "ExcludeResourceTypes": [],
+  "ResourceTypes": {
+    "AWS::S3::Bucket": {
+      "Properties": {
+        "BucketEncryption": {
+          "Required": true
+        }
+      }
+    }
+  }
+}

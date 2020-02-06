@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Provisions AWS Config Configuration Recorder and S3 Delivery Channel
+  if not already configured on target account.
+  Deploys a config rule that checks whether Amazon Amazon EC2) instances
+  have a public IP association.
+Parameters:
+  TeamName:
+    Type: String
+    Description: The name of the team owns the templates resources
+  ServiceName:
+    Type: String
+    Description: The service (project) name
+  Environment:
+    AllowedValues:
+      - prod
+      - dev
+      - sandbox
+    Type: String
+    Description: The environment to provision config
+  ConfigDeliveryFrequency:
+    AllowedValues:
+      - One_Hour
+      - Three_Hours
+      - Six_Hours
+      - Twelve_Hours
+      - TwentyFour_Hours
+    Type: String
+    ConstraintDescription: "Allowed Values are: One_Hour | Three_Hours | Six_Hours | Twelve_Hours | TwentyFour_Hours"
+  DeliveryChannelExists:
+    Type: String
+    Description: >-
+      AWS allows only one delivery channel per account.
+      Do you have an existing AWS Config delivery channel?
+    AllowedValues:
+      - 'yes'
+      - 'no'
+    ConstraintDescription: "Allowed Values are 'yes' or 'no'"
+  ConfigurationRecorderExists:
+    Type: String
+    Description: >-
+      AWS allows only one configuration recorder channel per account.
+      Do you have an existing AWS Config configuration recorder?
+    AllowedValues:
+      - 'yes'
+      - 'no'
+    ConstraintDescription: "Allowed Values are 'yes' or 'no'"
+
+  ConfigRuleName:
+    Type: String
+    Descripti
+    on: The name that you assign to the AWS Config rule.
+    MinLength: '1'
+    ConstraintDescription: This parameter is required.
+
+Conditions:
+  CreateDeliveryChannel:
+    Fn::Equals:
+      - Ref: 'DeliveryChannelExists'
+      - 'no'
+  CreateConfigurationRecorder:
+    Fn::Equals:
+      - Ref: 'ConfigurationRecorderExists'
+      - 'no'
+
+Resources:
+
+  ConfigKMSKey:
+    Type: 'AWS::KMS::Key'
+    Condition: CreateDeliveryChannel
+    DeletionPolicy: Retain
+    Properties:
+      Description: 'AWS Config Bucket KMS CMK'
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: AwsConfig
+        Statement:
+          -
+            Sid: AllowKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - 'kms:*'
+            Resource: '*'
+          -
+            Sid: AllowS3Access
+            Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - 'kms:DescribeKey'
+              - 'kms:GenerateDataKey*'
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:Decrypt'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService':
+                  Fn::Sub: 's3.${AWS::Region}.amazonaws.com'
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'ServiceName'
+        -
+          Key: Team
+          Value:
+            Ref: 'TeamName'
+        -
+          Key: Environment
+          Value:
+            Ref: 'Environment'
+
+  ConfigKMSKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Condition: CreateDeliveryChannel
+    Properties:
+      AliasName:
+        Fn::Sub: 'alias/${TeamName}/${ServiceName}/${Environment}/config'
+      TargetKeyId:
+        Ref: 'ConfigKMSKey'
+
+  ConfigS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Condition: CreateDeliveryChannel
+    DeletionPolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: '${TeamName}-${ServiceName}-${Environment}-config-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt ConfigKMSKey.Arn
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          -
+            Id: DefaultLifecycleRule
+            Status: Enabled
+            ExpirationInDays: 365
+            Transitions:
+              -
+                TransitionInDays: 30
+                StorageClass: STANDARD_IA
+              -
+                TransitionInDays: 60
+                StorageClass: GLACIER
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'ServiceName'
+        -
+          Key: Team
+          Value:
+            Ref: 'TeamName'
+        -
+          Key: Environment
+          Value:
+            Ref: 'Environment'
+
+  ConfigS3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Condition: CreateDeliveryChannel
+    Properties:
+      Bucket:
+        Ref: 'ConfigS3Bucket'
+      PolicyDocument:
+        Statement:
+          -
+            Sid: EnforceHTTPS
+            Action:
+              - 's3:*'
+            Effect: Deny
+            Principal: '*'
+            Resource:
+              Fn::Sub: 'arn:aws:s3:::${ConfigS3Bucket}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+          -
+            Sid: AWSConfigCheckBucketAcl
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action:
+              's3:GetBucketAcl'
+            Resource:
+              Fn::Sub: 'arn:aws:s3:::${ConfigS3Bucket}'
+          -
+            Sid: AWSConfigBucketDelivery
+            Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action:
+              - 's3:PutObject'
+            Resource:
+              - Fn::Sub: 'arn:aws:s3:::${ConfigS3Bucket}/AWSLogs/*'
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': bucket-owner-full-control
+          - Sid: DenyUnEncryptedObjectUploads
+            Principal:
+              AWS: '*'
+            Resource:
+              Fn::Sub: 'arn:aws:s3:::${ConfigS3Bucket}/*'
+            Action:
+              - 's3:PutObject'
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption-aws-kms-key-id':
+                    Fn::GetAtt: [ConfigKMSKey, Arn]
+            Effect: Deny
+
+  ConfigRecorderRole:
+    Type: 'AWS::IAM::Role'
+    Condition: CreateConfigurationRecorder
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - config.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSConfigRole'
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Sid: GetS3BucketAcl
+                Effect: Allow
+                Action:
+                  - 's3:GetBucketAcl'
+                Resource:
+                  Fn::Sub: 'arn:aws:s3:::${ConfigS3Bucket}'
+              -
+                Sid: PutS3Pbjects
+                Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                Resource:
+                  Fn::Sub: 'arn:aws:s3:::${ConfigS3Bucket}/AWSLogs/${AWS::AccountId}/*'
+                Condition:
+                  StringEquals:
+                    's3:x-amz-acl': bucket-owner-full-control
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'ServiceName'
+        -
+          Key: Team
+          Value:
+            Ref: 'TeamName'
+        -
+          Key: Environment
+          Value:
+            Ref: 'Environment'
+
+  ConfigRecorder:
+    Type: 'AWS::Config::ConfigurationRecorder'
+    Condition: CreateConfigurationRecorder
+    Properties:
+      Name: ec2-instance-recorder
+      RoleARN:
+        Fn::GetAtt:
+          - ConfigRecorderRole
+          - Arn
+      RecordingGroup:
+        ResourceTypes:
+          - 'AWS::EC2::Instance'
+
+  ConfigDeliveryChannel:
+    Type: 'AWS::Config::DeliveryChannel'
+    Condition: CreateDeliveryChannel
+    Properties:
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency:
+          Ref: 'ConfigDeliveryFrequency'
+      S3BucketName:
+        Ref: 'ConfigS3Bucket'

@@ -1,0 +1,523 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: test-cfn
+Parameters:
+  GitHubOAuthToken:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '[a-z0-9]*'
+    Default: '8cc356a6fec2b50867aa038225830769e63741ef'
+  GitHubOwner:
+    Type: String
+    Default: myusername
+    AllowedPattern: "[A-Za-z0-9-]+"
+  GitHubRepo:
+    Type: String
+    Default: test-dsl-pipeline
+    AllowedPattern: "[A-Za-z0-9-]+"
+  GitHubBranch:
+    Type: String
+    Default: develop
+    AllowedPattern: "[A-Za-z0-9-]+"
+  NotificationEmailAddress:
+    Type: String
+    AllowedPattern: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+    ConstraintDescription: It must be a valid email address
+    Description: Email to receive notification for approval requests or other notification between the pipeline stages.
+
+Resources:
+
+  PipelineKMSKey:
+    Type: 'AWS::KMS::Key'
+    DeletionPolicy: Delete
+    Properties:
+      Description: 'AWS Code Pipeline Artifact Store S3 Bucket KMS CMK'
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: PipelineArtifactStoreBucket
+        Statement:
+          -
+            Sid: AllowKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - 'kms:*'
+            Resource: '*'
+          -
+            Sid: AllowS3Access
+            Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - 'kms:DescribeKey'
+              - 'kms:GenerateDataKey*'
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:Decrypt'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService':
+                  Fn::Sub: 's3.${AWS::Region}.amazonaws.com'
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'AWS::StackName'
+
+  ConfigKMSKeyAlias:
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName:
+        Fn::Sub: 'alias/${AWS::StackName}/pipeline/s3-bucket'
+      TargetKeyId:
+        Ref: PipelineKMSKey
+
+  # *** S3 Bucket used for CodePipeline Artifacts
+  PipelineArtifactsStore:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName:
+        Fn::Sub: '${AWS::StackName}-pipeline-artifacts-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                Fn::GetAtt:
+                  - PipelineKMSKey
+                  - Arn
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'AWS::StackName'
+
+  # *** SSM parameter of Pipeline Artifacts S3 bucket name to be used by other CFN templates
+  PipelineArtifactsStoreParameter:
+    Type: 'AWS::SSM::Parameter'
+    Properties:
+      Name:
+        Fn::Sub: "/${AWS::StackName}/pipeline/artifact-store-name"
+      Description: The name of the pipeline artifact store bucket name
+      Type: String
+      Value:
+        Ref: 'PipelineArtifactsStore'
+      Tags:
+        "ApplicationName": !Ref "AWS::StackName"
+
+  # *** SNS Notification Topic to be used for approval requests or alerts.
+  PipelineNotificationTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        -
+          Endpoint:
+            Ref: 'NotificationEmailAddress'
+          Protocol: 'email'
+      TopicName:
+        Fn::Sub: '${AWS::StackName}-${AWS::Region}-notify'
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'AWS::StackName'
+
+  # *** SNS Notification Topic Policy that strict publish on SNS only from events bus
+  PipelineNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: AllowCloudWatchEventsToPublish
+        Version: '2012-10-17'
+        Statement:
+          -
+            Sid: AllowPublishSns
+            Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action:
+              - 'sns:Publish'
+            Resource:
+              Ref: 'PipelineNotificationTopic'
+      Topics:
+        - Ref: 'PipelineNotificationTopic'
+
+  # *** We force log retention by create the code build's log group.
+  ValidateTemplatesProjectLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName:
+        Fn::Sub: '/aws/codebuild/${AWS::StackName}-validate-templates-project'
+      RetentionInDays: 30
+
+  # *** Managed Policy that allows access on Pipeline artifact store S3 bucket
+  PipelineStagesRequiredPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      Description: Permissions required actions used from all pipeline stages
+      ManagedPolicyName:
+        Fn::Sub: '${AWS::StackName}-pipeline-default-policy'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource:
+              - Fn::Sub: 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+            Sid: AllowLogWriting
+          -
+            Action:
+              - 's3:ListBucket'
+              - 's3:ListBucketVersions'
+              - 's3:ListObjects'
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+              - 's3:PutObject'
+            Effect: Allow
+            Resource:
+              - Fn::Sub: '${PipelineArtifactsStore.Arn}/*'
+              - Fn::GetAtt:
+                  - PipelineArtifactsStore
+                  - Arn
+            Sid: AllowS3Access
+          - Action:
+              - 'kms:*'
+            Effect: Allow
+            Resource: '*'
+            Sid: AllowKmsUsage
+
+  # *** CodeBuild Project that validates the cfn templates
+  ValidateTemplatesProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name:
+        Fn::Sub: '${AWS::StackName}-validate-templates-project'
+      Description: Validates CloudFormation Templates
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          -
+            Name: DEBIAN_FRONTEND
+            Value: noninteractive
+        # *** Docker image to use for CodeBuild container - Use http://amzn.to/2mjCI91 for reference
+        Image: aws/codebuild/standard:2.0
+        Type: LINUX_CONTAINER
+      ServiceRole:
+        Fn::GetAtt:
+          - CodeBuildValidateStageIamRole
+          - Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - pip install -r requirements.txt
+            build:
+              commands:
+                - make lint-stacks
+      TimeoutInMinutes: 15
+      Tags:
+        -
+          Key: Name
+          Value:
+            Fn::Sub: '${AWS::StackName}-validate-templates-project'
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'AWS::StackName'
+
+  # *** IAM Role for the Code Build Projects
+  CodeBuildValidateStageIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - Ref: 'PipelineStagesRequiredPolicy'
+      Policies:
+        -
+          PolicyName:
+            Fn::Sub: '${AWS::StackName}-validate-stage-codebuild-policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Action:
+                  - 'cloudformation:ValidateTemplate'
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowValidateCfnTemplates
+
+  # *** The CodePipeline that runs source, build, test and deploy stages
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Tags:
+        -
+          Key: ApplicationName
+          Value: DSL pipeline
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: 'PipelineArtifactsStore'
+      RestartExecutionOnUpdate: true
+      RoleArn:
+        Fn::GetAtt:
+          - CodePipelineRole
+          - Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              InputArtifacts: []
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              OutputArtifacts:
+                -
+                  Name: SourceArtifacts
+              Configuration:
+                Owner:
+                  Ref: 'GitHubOwner'
+                Repo:
+                  Ref: 'GitHubRepo'
+                Branch:
+                  Ref: 'GitHubBranch'
+                # Do not run periodically but only when github hook is triggered
+                PollForSourceChanges: false
+                OAuthToken:
+                  Ref: 'GitHubOAuthToken'
+              RunOrder: 1
+        -
+          Name: Validate
+          Actions:
+            -
+              Name: ValidateTemplates
+              InputArtifacts:
+                -
+                  Name: SourceArtifacts
+              OutputArtifacts:
+                -
+                  Name: ValidatedArtifacts
+              ActionTypeId:
+                Category: Test
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName:
+                  Ref: 'ValidateTemplatesProject'
+              RunOrder: 1
+            -
+              Name: LintTemplates
+              InputArtifacts:
+                -
+                  Name: ValidatedArtifacts
+              OutputArtifacts:
+                -
+                  Name: TestedArtifacts
+              ActionTypeId:
+                Category: Test
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName:
+                  Ref: 'ValidateTemplatesProject'
+              RunOrder: 2
+
+
+  # 'GithubWebhook' satisfies two requirements:
+  # -- Means that updates are pushed from GitHub, rather than AWS having to poll
+  # -- Means we can filter for required changes
+  GithubWebhook:
+    Type: 'AWS::CodePipeline::Webhook'
+    Properties:
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken:
+          Ref: 'GitHubOAuthToken'
+      RegisterWithThirdParty: true
+      Filters:
+        -
+          JsonPath: "$.ref"
+          MatchEquals: refs/heads/{Branch}
+      TargetPipeline:
+        Ref: 'CodePipeline'
+      TargetAction: Source
+      TargetPipelineVersion:
+        Fn::GetAtt:
+          - CodePipeline
+          - Version
+
+  # *** CloudWatch Event Rule that publish a Pipeline status to the target Notification Topic
+  CodePipelineNotificationEvent:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description:
+        Fn::Sub: '${AWS::StackName} CodePipeline State'
+      Name:
+        Fn::Sub: '${AWS::StackName}-codepipeline-state-event-rule'
+      EventPattern:
+        source:
+          - 'aws.codepipeline'
+        detail-type:
+          - 'CodePipeline Pipeline Execution State Change'
+        detail:
+          state:
+            - 'FAILED'
+      State: 'ENABLED'
+      Targets:
+        -
+          Id: 'PipelineState'
+          Arn:
+            Ref: 'PipelineNotificationTopic'
+          InputTransformer:
+            InputPathsMap:
+              # Values need to be in double quotes to work
+              pipeline: "$.detail.pipeline"
+              state: "$.detail.state"
+            # InputTemplate is strict in CloudFormation.
+            # It is of type string but it does not accept any form of
+            # valid YAML string. For that reason we need to use
+            # Literal Block Scalar '|'
+            # Value need to be in double quotes to work
+            InputTemplate: |
+              "The Pipeline <pipeline> finished with state: <state>"
+
+  # *** IAM Role for the CodePipeline
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        -
+          Key: ApplicationName
+          Value: DSL pipeline
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+        -
+          PolicyName: CodePipelineIamPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Action:
+                  - iam:PassRole
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowIamPassRole
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+              -
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowCodeDeploy
+              -
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:UpdateStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:ValidateTemplate
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowCloudformation
+              -
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowCodeBuild
+              -
+                Action:
+                  - sns:*
+                Effect: Allow
+                Resource:
+                  Ref: 'PipelineNotificationTopic'
+                Sid: AllowSNSTopic
+
+  # *** IAM Role for the CloudFormation
+  CloudformationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: cloudformation.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+        -
+          PolicyName: CloudformationIamPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Action:
+                  - glue:*Database*
+                  - glue:*Table*
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowCreateGlue
+              -
+                Action:
+                  - s3:*EncryptionConfiguration
+                  - s3:CreateBucket
+                  - s3:*Tagging
+                  - s3:PutBucketPolicy
+                Effect: Allow
+                Resource: '*'
+                Sid: AllowS3Creation
+      Tags:
+        -
+          Key: ApplicationName
+          Value:
+            Ref: 'AWS::StackName'
