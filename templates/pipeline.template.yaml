@@ -5,18 +5,17 @@ Parameters:
     Type: String
     NoEcho: true
     AllowedPattern: '[a-z0-9]*'
-    Default: '8cc356a6fec2b50867aa038225830769e63741ef'
   GitHubOwner:
     Type: String
-    Default: myusername
+    Default: lagrianitis
     AllowedPattern: "[A-Za-z0-9-]+"
   GitHubRepo:
     Type: String
-    Default: test-dsl-pipeline
+    Default: ec2demo
     AllowedPattern: "[A-Za-z0-9-]+"
   GitHubBranch:
     Type: String
-    Default: develop
+    Default: master
     AllowedPattern: "[A-Za-z0-9-]+"
   NotificationEmailAddress:
     Type: String
