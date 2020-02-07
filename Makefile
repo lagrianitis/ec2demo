@@ -21,6 +21,10 @@ git-develop:
 	git commit -m ${m}
 	git push origin develop
 
+git-merge-master:
+	git checkout master
+	git merge develop
+
 install-req:
 	pip install -r requirement.txt
 
