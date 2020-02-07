@@ -11,28 +11,20 @@ help: ## All possible make arguements targets
 guard-%:
 	@if [ -z '${${*}}' ]; then echo "Environment variable $* not set"; exit 1; fi
 
-git-master:
+git:
 	git add .
 	git commit -m ${m}
 	git push origin master
 
-git-develop:
-	git add .
-	git commit -m ${m}
-	git push origin develop
-
-git-merge-master:
-	git checkout master
-	git merge develop
-
 install-req:
-	pip install -r requirement.txt
+	pip install -r requirements.txt
 
 cfnlint: install-req
 	cfn-lint -u
 	cfn-lint -o ./validate/cfn-lint/spec.json -a validate/cfn-lint/rules -t ./templates/*.template.yaml
 
-check-env: guard-AWS_PROFILE guard-CODEPIPELINE_STACK_NAME guard-GITHUB_OWNER guard-GITHUB_REPO guard-SNS_EMAIL_ADDRESS
+check-env: guard-AWS_PROFILE guard-CODEPIPELINE_STACK_NAME guard-GITHUB_OWNER guard-GITHUB_REPO guard-SNS_EMAIL_ADDRESS guard-EC2_SUBNET_ID
+	@sed -e 's/EC2_SUBNET_ID_PLACEHOLDER/'"$$EC2_SUBNET_ID"'/g' parameters.json.template > parameters.json
 
 check-repo:
 	@git ls-remote https://github.com/$(GITHUB_OWNER)/$(GITHUB_REPO) > /dev/null \

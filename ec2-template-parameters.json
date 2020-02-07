@@ -1,0 +1,8 @@
+{
+  "Parameters": {
+    "SubnetId": "",
+    "InstanceType": "",
+    "GoldenAmiIdSsmParameterName": "",
+    "EnableSSMSessionManager": ""
+  }
+}

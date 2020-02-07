@@ -2,20 +2,6 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: fa
 
 Parameters:
-  TeamName:
-    Type: String
-    Description: The name of the team owns the templates resources
-  ServiceName:
-    Type: String
-    Description: The service (project) name
-  Environment:
-    AllowedValues:
-      - prod
-      - dev
-      - sandbox
-    Type: String
-    Description: The environment to provision config
-    ConstraintDescription: Must be one of prod | dev | sandbox
   SubnetId:
     Type: 'AWS::EC2::Subnet::Id'
     Description: The SubnetIds in your VPC
@@ -34,10 +20,10 @@ Parameters:
                     i2.2xlarge, i2.4xlarge, i2.8xlarge, d2.xlarge, d2.2xlarge, d2.4xlarge, d2.8xlarge,
                     hi1.4xlarge, hs1.8xlarge, cr1.8xlarge, cc2.8xlarge, cg1.4xlarge]
     ConstraintDescription: Must be a valid EC2 instance type.
-  GoldenAmiId:
+  GoldenAmiIdSsmParameterName:
     Type:  'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Description: SSM Parameter store Name of Golden AMI ID
-    Default: '/kpn/landing-zone/amis/cis-amazon-linux-2/latest/image-id'
+    Default: '/latest/golden-ami-id'
   EnableSSMSessionManager:
     Type: String
     Description: >-
@@ -90,7 +76,7 @@ Resources:
               -
                 Key: Name
                 Value:
-                  Fn::Sub: ${StackName}-instance
+                  Fn::Sub: "${AWS::StackName}-instance"
               -
                 Key: ApplicationName
                 Value:
@@ -103,7 +89,7 @@ Resources:
       LaunchTemplate:
         LaunchTemplateId:
           Ref: 'Ec2LaunchTemplate'
-        Version: 1
+        Version: '1'
 
   # *** IAM Role required to use SSM Session Manager.
   #     It will deployed only if EnableSSMSessionManager Parameter
@@ -127,15 +113,7 @@ Resources:
         -
           Key: ApplicationName
           Value:
-            Ref: 'ServiceName'
-        -
-          Key: Team
-          Value:
-            Ref: 'TeamName'
-        -
-          Key: Environment
-          Value:
-            Ref: 'Environment'
+            Ref: 'AWS::StackName'
 
   # *** EC2 Instance Profile to attach the IAM Role required to use
   #     SSM Session Manager.
@@ -146,7 +124,7 @@ Resources:
     Type: 'AWS::IAM::InstanceProfile'
     Properties:
       Path:
-        Fn::Sub: '/${ServiceName}/'
+        Fn::Sub: '/${AWS::StackName}/'
       Roles:
         - Ref: 'SSMSessionManagerIamRole'
 

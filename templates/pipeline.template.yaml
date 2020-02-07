@@ -310,7 +310,7 @@ Resources:
                   Ref: 'GitHubOAuthToken'
               RunOrder: 1
         -
-          Name: Validate
+          Name: ValidateDev
           Actions:
             -
               Name: ValidateTemplates
@@ -330,7 +330,7 @@ Resources:
                   Ref: 'ValidateTemplatesProject'
               RunOrder: 1
             -
-              Name: LintTemplates
+              Name: LintTemplatesDev
               InputArtifacts:
                 -
                   Name: ValidatedArtifacts
@@ -345,8 +345,29 @@ Resources:
               Configuration:
                 ProjectName:
                   Ref: 'ValidateTemplatesProject'
+              RunOrder: 1
+            -
+              Name: DeployEc2
+              InputArtifacts:
+                -
+                  Name: TestedArtifacts
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn:
+                  Fn::GetAtt:
+                    - CloudformationRole
+                    - Arn
+                Capabilities: CAPABILITY_IAM
+                StackName:
+                  Fn::Sub: '${AWS::StackName}-ec2'
+                TemplateConfiguration: TemplateSource::ec2-template-parameters.json
+                TemplatePath: ValidatedSourceCode::templates/ec2.template.yaml
               RunOrder: 2
-
 
   # 'GithubWebhook' satisfies two requirements:
   # -- Means that updates are pushed from GitHub, rather than AWS having to poll
