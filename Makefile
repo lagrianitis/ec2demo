@@ -12,7 +12,7 @@ guard-%:
 	@if [ -z '${${*}}' ]; then echo "Environment variable $* not set"; exit 1; fi
 
 install-req:
-	python3 -m pip install -r requirement.txt
+	pip install -r requirement.txt
 
 cfn-lint: install-req
 	cfn-lint -u
