@@ -2,7 +2,7 @@ SHELL:=/bin/bash
 include makefile.env
 AWS_PROFILE?=default
 
-.PHONY: all help login create-pipeline update-pipeline delete-pipeline clean-all
+.PHONY: all help login create-pipeline update-pipeline delete-pipeline clean-all cnf-lint
 
 help: ## All possible make arguements targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | xsort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
@@ -10,6 +10,13 @@ help: ## All possible make arguements targets
 ## Implicit guard target, that checks that the variable in the stem is defined.
 guard-%:
 	@if [ -z '${${*}}' ]; then echo "Environment variable $* not set"; exit 1; fi
+
+install-req:
+	python3 -m pip install -r requirement.txt
+
+cfn-lint: install-req
+	cfn-lint -u
+	cfn-lint -o ./validate/cfn-lint/spec.json -a validate/cfn-lint/rules -t ./pipeline.yml ./template/*.yml
 
 check-env: guard-AWS_PROFILE guard-CODEPIPELINE_STACK_NAME guard-GITHUB_OWNER guard-GITHUB_REPO guard-SNS_EMAIL_ADDRESS
 

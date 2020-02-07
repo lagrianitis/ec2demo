@@ -227,7 +227,7 @@ Resources:
                 - pip install -r requirements.txt
             build:
               commands:
-                - make lint-stacks
+                - make cnf-lint
       TimeoutInMinutes: 15
       Tags:
         -
