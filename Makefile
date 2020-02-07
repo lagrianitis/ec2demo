@@ -11,6 +11,11 @@ help: ## All possible make arguements targets
 guard-%:
 	@if [ -z '${${*}}' ]; then echo "Environment variable $* not set"; exit 1; fi
 
+git:
+	git add .
+	git commit -m ${m}
+	git push origin master
+
 install-req:
 	pip install -r requirement.txt
 
