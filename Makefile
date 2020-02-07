@@ -20,7 +20,7 @@ check-repo:
 
 create-pipeline: check-env check-repo
 	@/bin/bash scripts/create-pipeline.sh
-update-pipeline:
+update-pipeline: check-env check-repo
 	@/bin/bash scripts/update-pipeline.sh
 delete-pipeline:
 	@/bin/bash scripts/delete-pipeline.sh
