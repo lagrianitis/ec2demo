@@ -11,17 +11,22 @@ help: ## All possible make arguements targets
 guard-%:
 	@if [ -z '${${*}}' ]; then echo "Environment variable $* not set"; exit 1; fi
 
-git:
+git-master:
 	git add .
 	git commit -m ${m}
 	git push origin master
 
+git-develop:
+	git add .
+	git commit -m ${m}
+	git push origin develop
+
 install-req:
 	pip install -r requirement.txt
 
-cfn-lint: install-req
+cfnlint: install-req
 	cfn-lint -u
-	cfn-lint -o ./validate/cfn-lint/spec.json -a validate/cfn-lint/rules -t ./pipeline.yml ./template/*.yml
+	cfn-lint -o ./validate/cfn-lint/spec.json -a validate/cfn-lint/rules -t ./templates/*.template.yaml
 
 check-env: guard-AWS_PROFILE guard-CODEPIPELINE_STACK_NAME guard-GITHUB_OWNER guard-GITHUB_REPO guard-SNS_EMAIL_ADDRESS
 
